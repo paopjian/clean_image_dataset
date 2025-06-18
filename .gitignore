@@ -1,0 +1,7 @@
+data
+result
+result_list
+.idea
+/3.get_features/pretrained/adaface_ir101_webface12m.ckpt
+/2.get_landmark/weights/adaface_ir101_webface12m.ckpt
+/2.get_landmark/weights/retinaface_Resnet50_Final.pth
