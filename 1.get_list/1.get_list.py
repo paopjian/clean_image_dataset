@@ -8,12 +8,21 @@ from tqdm import tqdm
 def is_image_file(filename):
     return filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif'))
 
+
 def get_image_size(path):
     try:
         with Image.open(path) as img:
             return img.size
     except Exception:
         return None
+
+
+def write_to_file(file_path, data_list, mode):
+    """将数据列表写入文件"""
+    if data_list and len(data_list) > 0:
+        with open(file_path, mode, encoding='utf-8') as f:
+            f.write('\n'.join(data_list) + '\n')
+
 
 def process_group(group_path, group_name, output_dir):
     start_time = time.time()
@@ -110,19 +119,12 @@ def process_group(group_path, group_name, output_dir):
                         body_list.extend(image_paths)
                         body_count += len(image_paths)
                         folder_counts[folder]['body_list'] = len(image_paths)
-
-            with open(os.path.join(group_output_dir, "face_small.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(face_small) + '\n')
-            with open(os.path.join(group_output_dir, "body_small.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(body_small) + '\n')
-            with open(os.path.join(group_output_dir, "face_list.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(face_list) + '\n')
-            with open(os.path.join(group_output_dir, "body_list.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(body_list) + '\n')
-            with open(os.path.join(group_output_dir, "face_exception.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(face_exception) + '\n')
-            with open(os.path.join(group_output_dir, "body_exception.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(body_exception) + '\n')
+            write_to_file(os.path.join(group_output_dir, "face_small.txt"), face_small, 'a')
+            write_to_file(os.path.join(group_output_dir, "body_small.txt"), body_small, 'a')
+            write_to_file(os.path.join(group_output_dir, "face_list.txt"), face_list, 'a')
+            write_to_file(os.path.join(group_output_dir, "body_list.txt"), body_list, 'a')
+            write_to_file(os.path.join(group_output_dir, "face_exception.txt"), face_exception, 'a')
+            write_to_file(os.path.join(group_output_dir, "body_exception.txt"), body_exception, 'a')
             face_list = []
             body_list = []
             face_small = []
@@ -154,6 +156,7 @@ def process_group(group_path, group_name, output_dir):
     elapsed_time = time.time() - start_time
     print(f"完成处理 {group_name}, 耗时: {elapsed_time:.2f}秒")
     print(f"Face图片: {face_count}张, Body图片: {body_count}张")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="处理数据集中的图片并生成报告")

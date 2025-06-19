@@ -19,6 +19,13 @@ def get_image_size(path):
         return None
 
 
+def write_to_file(file_path, data_list, mode):
+    """将数据列表写入文件"""
+    if data_list and len(data_list) > 0:
+        with open(file_path, mode, encoding='utf-8') as f:
+            f.write('\n'.join(data_list) + '\n')
+
+
 def process_group(group_path, group_name, output_dir):
     start_time = time.time()
     face_list = []
@@ -43,7 +50,6 @@ def process_group(group_path, group_name, output_dir):
         os.makedirs(group_output_dir)
 
     # 确保组路径是绝对路径
-    position = 0
     group_abs_path = os.path.abspath(group_path)
     with tqdm(os.listdir(group_abs_path), desc=f"{group_name}",
               total=len(os.listdir(group_abs_path)),
@@ -53,6 +59,7 @@ def process_group(group_path, group_name, output_dir):
             folder_path = os.path.join(group_abs_path, folder)
             if not os.path.isdir(folder_path):
                 continue
+
             # 初始化当前folder的计数
             folder_counts[folder] = {
                 'face_list': 0,
@@ -114,20 +121,12 @@ def process_group(group_path, group_name, output_dir):
                         body_list.extend(image_paths)
                         body_count += len(image_paths)
                         folder_counts[folder]['body_list'] = len(image_paths)
-
-            with open(os.path.join(group_output_dir, "face_small.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(face_small) + '\n')
-            with open(os.path.join(group_output_dir, "body_small.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(body_small) + '\n')
-            with open(os.path.join(group_output_dir, "face_list.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(face_list) + '\n')
-
-            with open(os.path.join(group_output_dir, "body_list.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(body_list) + '\n')
-            with open(os.path.join(group_output_dir, "face_exception.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(face_exception) + '\n')
-            with open(os.path.join(group_output_dir, "body_exception.txt"), 'a', encoding='utf-8') as f:
-                f.write('\n'.join(body_exception) + '\n')
+            write_to_file(os.path.join(group_output_dir, "face_small.txt"), face_small, 'a')
+            write_to_file(os.path.join(group_output_dir, "body_small.txt"), body_small, 'a')
+            write_to_file(os.path.join(group_output_dir, "face_list.txt"), face_list, 'a')
+            write_to_file(os.path.join(group_output_dir, "body_list.txt"), body_list, 'a')
+            write_to_file(os.path.join(group_output_dir, "face_exception.txt"), face_exception, 'a')
+            write_to_file(os.path.join(group_output_dir, "body_exception.txt"), body_exception, 'a')
             face_list = []
             body_list = []
             face_small = []
@@ -140,7 +139,7 @@ def process_group(group_path, group_name, output_dir):
         f.write("folder,face_list,face_small,face_exception,body_list,body_small,body_exception\n")  # CSV头部
         for folder, counts in folder_counts.items():
             f.write(f"{folder},{counts['face_list']},{counts['face_small']},{counts['face_exception']},"
-                   f"{counts['body_list']},{counts['body_small']},{counts['body_exception']}\n")
+                    f"{counts['body_list']},{counts['body_small']},{counts['body_exception']}\n")
 
     # # 使用前缀命名文件
     # with open(os.path.join(group_output_dir, "face_small.txt"), 'w', encoding='utf-8') as f:
