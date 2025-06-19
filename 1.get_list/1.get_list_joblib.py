@@ -4,7 +4,8 @@ import argparse
 from PIL import Image
 from joblib import Parallel, delayed
 import time
-
+from tqdm import tqdm
+import multiprocessing as mp
 
 def is_image_file(filename):
     return filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif'))
@@ -35,74 +36,79 @@ def process_group(group_path, group_name, output_dir):
     folder_counts = {}
 
     # 确保组路径是绝对路径
+    position = mp.current_process()._identity[0] % 10
     group_abs_path = os.path.abspath(group_path)
-
-    for folder in os.listdir(group_abs_path):
-        folder_path = os.path.join(group_abs_path, folder)
-        if not os.path.isdir(folder_path):
-            continue
-
-        # 初始化当前folder的计数
-        folder_counts[folder] = {
-            'face_list': 0,
-            'face_small': 0,
-            'face_exception': 0,
-            'body_list': 0,
-            'body_small': 0,
-            'body_exception': 0
-        }
-
-        for part in ['face', 'body']:
-            part_path = os.path.join(folder_path, part)
-            if not os.path.isdir(part_path):
+    with tqdm(os.listdir(group_abs_path), desc=f"{group_name}",
+              position=position,
+              total=len(os.listdir(group_abs_path)),
+              leave=True,
+              file=open(f"progress_{group_name}.log", 'w', encoding='utf-8')) as pbar:
+        for folder in pbar:
+            folder_path = os.path.join(group_abs_path, folder)
+            if not os.path.isdir(folder_path):
                 continue
 
-            # 获取图片文件列表 - 使用绝对路径
-            images = [f for f in os.listdir(part_path) if is_image_file(f)]
-            image_paths = [os.path.abspath(os.path.join(part_path, f)) for f in images]
-            count = len(image_paths)
+            # 初始化当前folder的计数
+            folder_counts[folder] = {
+                'face_list': 0,
+                'face_small': 0,
+                'face_exception': 0,
+                'body_list': 0,
+                'body_small': 0,
+                'body_exception': 0
+            }
 
-            # 检查数量异常 - 根据类型分别记录异常
-            if count < 10 or count > 100:
-                exception_msg = f"{os.path.abspath(part_path)} (图片数量: {count})"
-                if part == 'face':
-                    face_exception.append(exception_msg)
-                    folder_counts[folder]['face_exception'] = count  # 记录实际异常数量
-                else:
-                    body_exception.append(exception_msg)
-                    folder_counts[folder]['body_exception'] = count  # 记录实际异常数量
-                continue
-
-            # 检查分辨率
-            small_imgs = []
-            for img_path in image_paths[:]:  # 使用副本进行迭代
-                size = get_image_size(img_path)
-                if size is None:
+            for part in ['face', 'body']:
+                part_path = os.path.join(folder_path, part)
+                if not os.path.isdir(part_path):
                     continue
-                w, h = size
-                if w < 50 or h < 50:
-                    small_imgs.append(img_path)
-                    image_paths.remove(img_path)  # 从原列表中移除小图片
 
-            # 将小图片添加到对应列表
-            if small_imgs:
-                if part == 'face':
-                    face_small.extend(small_imgs)
-                    folder_counts[folder]['face_small'] = len(small_imgs)
-                else:
-                    body_small.extend(small_imgs)
-                    folder_counts[folder]['body_small'] = len(small_imgs)
+                # 获取图片文件列表 - 使用绝对路径
+                images = [f for f in os.listdir(part_path) if is_image_file(f)]
+                image_paths = [os.path.abspath(os.path.join(part_path, f)) for f in images]
+                count = len(image_paths)
 
-            # 将正常尺寸的图片添加到对应列表
-            if image_paths:  # 仅当有正常尺寸的图片时添加
-                if part == 'face':
-                    face_list.extend(image_paths)
-                    face_count += len(image_paths)
-                    folder_counts[folder]['face_list'] = len(image_paths)
-                else:
-                    body_list.extend(image_paths)
-                    body_count += len(image_paths)
-                    folder_counts[folder]['body_list'] = len(image_paths)
+                # 检查数量异常 - 根据类型分别记录异常
+                if count < 10 or count > 100:
+                    exception_msg = f"{os.path.abspath(part_path)} (图片数量: {count})"
+                    if part == 'face':
+                        face_exception.append(exception_msg)
+                        folder_counts[folder]['face_exception'] = count  # 记录实际异常数量
+                    else:
+                        body_exception.append(exception_msg)
+                        folder_counts[folder]['body_exception'] = count  # 记录实际异常数量
+                    continue
+
+                # 检查分辨率
+                small_imgs = []
+                for img_path in image_paths[:]:  # 使用副本进行迭代
+                    size = get_image_size(img_path)
+                    if size is None:
+                        continue
+                    w, h = size
+                    if w < 50 or h < 50:
+                        small_imgs.append(img_path)
+                        image_paths.remove(img_path)  # 从原列表中移除小图片
+
+                # 将小图片添加到对应列表
+                if small_imgs:
+                    if part == 'face':
+                        face_small.extend(small_imgs)
+                        folder_counts[folder]['face_small'] = len(small_imgs)
+                    else:
+                        body_small.extend(small_imgs)
+                        folder_counts[folder]['body_small'] = len(small_imgs)
+
+                # 将正常尺寸的图片添加到对应列表
+                if image_paths:  # 仅当有正常尺寸的图片时添加
+                    if part == 'face':
+                        face_list.extend(image_paths)
+                        face_count += len(image_paths)
+                        folder_counts[folder]['face_list'] = len(image_paths)
+                    else:
+                        body_list.extend(image_paths)
+                        body_count += len(image_paths)
+                        folder_counts[folder]['body_list'] = len(image_paths)
 
     # 写入文件
     prefix = group_name
@@ -142,7 +148,7 @@ def main():
     parser.add_argument('--data_dir', type=str, default='../data', help='包含所有 group 的数据目录路径')
     parser.add_argument('--output_dir', type=str, default='../result_list', help='输出结果的目录路径')
     parser.add_argument('--group', type=str, help='指定处理的单个 group (例如 group_0)，不指定则处理所有group')
-    parser.add_argument('--n_jobs', type=int, default=-1, help='使用的进程数，默认使用所有CPU核心')
+    parser.add_argument('--n_jobs', type=int, default=2, help='使用的进程数，默认使用所有CPU核心')
     parser.add_argument('--verbose', type=int, default=1, help='显示进度信息的级别')
     args = parser.parse_args()
 

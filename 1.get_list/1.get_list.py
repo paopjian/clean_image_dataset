@@ -2,6 +2,7 @@ import os
 import argparse
 from PIL import Image
 import time
+from tqdm import tqdm
 
 def is_image_file(filename):
     return filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif'))
@@ -32,7 +33,7 @@ def process_group(group_path, group_name, output_dir):
     # 确保组路径是绝对路径
     group_abs_path = os.path.abspath(group_path)
 
-    for folder in os.listdir(group_abs_path):
+    for folder in tqdm(os.listdir(group_abs_path), desc="Processing " + group_name, ):
         folder_path = os.path.join(group_abs_path, folder)
         if not os.path.isdir(folder_path):
             continue
