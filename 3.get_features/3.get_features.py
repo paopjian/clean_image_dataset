@@ -152,7 +152,9 @@ def main():
             face_detect_list = f.readlines()
         
         print(f"处理组 {group_dir}, 共 {len(face_detect_list)} 张人脸")
-
+        if len(face_detect_list) == 0:
+            print(f"组 {group_dir} 中没有人脸数据，跳过处理")
+            continue
         img_paths = []
         landmarks = []
         faceness_scores = []

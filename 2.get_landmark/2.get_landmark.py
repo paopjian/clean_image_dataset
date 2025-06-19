@@ -12,6 +12,19 @@ from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='RetinaFace人脸检测和五点关键点提取')
+    parser.add_argument('--cuda_id', default=0, type=int, help='CUDA设备ID (默认: 0)')
+    parser.add_argument('--input_dir', default='../result_list', type=str, help='结果目录 (默认: ../result)')
+    parser.add_argument('--specific_folder', default='', type=str,
+                        help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')  # ../result/group_0
+    parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
+    parser.add_argument('--model_path', default='./weights/retinaface_Resnet50_Final.pth', type=str, help='模型路径')
+    parser.add_argument('--save_image', default='True', type=str, help='保存图片')
+
+    return parser.parse_args()
+
+
 def check_keys(model, pretrained_state_dict):
     ckpt_keys = set(pretrained_state_dict.keys())
     model_keys = set(model.state_dict().keys())
@@ -53,7 +66,7 @@ def detect_face(img_path, net, device, cfg):
     img_raw = cv2.imread(img_path, cv2.IMREAD_COLOR)
     if img_raw is None:
         print(f"无法读取图像: {img_path}")
-        return None
+        return None, None
 
     img = np.float32(img_raw)
     im_height, im_width, _ = img.shape
@@ -88,7 +101,7 @@ def detect_face(img_path, net, device, cfg):
     confidence_threshold = 0.02
     inds = np.where(scores > confidence_threshold)[0]
     if len(inds) == 0:
-        return None
+        return None, None
 
     boxes = boxes[inds]
     landms = landms[inds]
@@ -136,19 +149,6 @@ def detect_face(img_path, net, device, cfg):
     best_landms = landms[best_face_idx]
     best_score = dets[best_face_idx, 4]
     return best_landms, best_score
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description='RetinaFace人脸检测和五点关键点提取')
-    parser.add_argument('--cuda_id', default=0, type=int, help='CUDA设备ID (默认: 0)')
-    parser.add_argument('--input_dir', default='../result_list', type=str, help='结果目录 (默认: ../result)')
-    parser.add_argument('--specific_folder', default='', type=str,
-                        help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')  # ../result/group_0
-    parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
-    parser.add_argument('--model_path', default='./weights/retinaface_ResNet50_Final.pth', type=str, help='模型路径')
-    parser.add_argument('--save_image', default='True', type=str, help='保存图片')
-
-    return parser.parse_args()
 
 
 def main():

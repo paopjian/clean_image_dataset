@@ -1,7 +1,7 @@
 from __future__ import print_function
 import os
 import torch
-import torch.backends.cudnn as cudnn
+# import torch.backends.cudnn as cudnn
 import numpy as np
 import argparse
 from joblib import Parallel, delayed
@@ -13,6 +13,22 @@ from utils.nms.py_cpu_nms import py_cpu_nms
 import cv2
 from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='RetinaFace人脸检测和五点关键点提取')
+    parser.add_argument('--cuda_id', default=0, type=int, help='CUDA设备ID (默认: 0)')
+    parser.add_argument('--input_dir', default='../result_list', type=str, help='结果目录 (默认: ../result)')
+    parser.add_argument('--specific_folder', default='', type=str,
+                        help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')  # ../result/group_0
+    parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
+    parser.add_argument('--model_path', default='./weights/retinaface_Resnet50_Final.pth', type=str, help='模型路径')
+    parser.add_argument('--save_image', default='False', type=str, help='保存图片')
+    parser.add_argument('--num_gpus', default=4, type=int, help='要使用的GPU数量 (默认: 4)')
+    parser.add_argument('--n_jobs', default=None, type=int, help='并行任务数 (默认: GPU数量)')
+
+    return parser.parse_args()
+
 
 def check_keys(model, pretrained_state_dict):
     ckpt_keys = set(pretrained_state_dict.keys())
@@ -26,11 +42,13 @@ def check_keys(model, pretrained_state_dict):
     assert len(used_pretrained_keys) > 0, 'load NONE from pretrained checkpoint'
     return True
 
+
 def remove_prefix(state_dict, prefix):
     ''' Old style model is stored with all names of parameters sharing common prefix 'module.' '''
     # print('remove prefix \'{}\''.format(prefix))
     f = lambda x: x.split(prefix, 1)[-1] if x.startswith(prefix) else x
     return {f(key): value for key, value in state_dict.items()}
+
 
 def load_model(model, pretrained_path, load_to_cpu):
     print('加载模型 {}'.format(pretrained_path))
@@ -47,13 +65,14 @@ def load_model(model, pretrained_path, load_to_cpu):
     model.load_state_dict(pretrained_dict, strict=False)
     return model
 
+
 def detect_face(img_path, net, device, cfg):
     # 读取图像
     img_raw = cv2.imread(img_path, cv2.IMREAD_COLOR)
     if img_raw is None:
         print(f"无法读取图像: {img_path}")
-        return None
-    
+        return None, None
+
     img = np.float32(img_raw)
     im_height, im_width, _ = img.shape
     scale = torch.Tensor([img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
@@ -87,8 +106,8 @@ def detect_face(img_path, net, device, cfg):
     confidence_threshold = 0.02
     inds = np.where(scores > confidence_threshold)[0]
     if len(inds) == 0:
-        return None
-    
+        return None, None
+
     boxes = boxes[inds]
     landms = landms[inds]
     scores = scores[inds]
@@ -111,11 +130,11 @@ def detect_face(img_path, net, device, cfg):
     keep_top_k = 10
     dets = dets[:keep_top_k, :]
     landms = landms[:keep_top_k, :]
-    
+
     # 如果没有检测到人脸，返回None
     if len(dets) == 0:
-        return None
-    
+        return None, None
+
     # 返回距离图片中心最近的人脸的五点坐标
     # 计算图片中心点
     image_center_x = im_width / 2
@@ -135,6 +154,7 @@ def detect_face(img_path, net, device, cfg):
     best_landms = landms[best_face_idx]
     best_score = dets[best_face_idx, 4]
     return best_landms, best_score
+
 
 def process_folder(folder_path, gpu_pool, model_path, save_image=False):
     """
@@ -179,7 +199,7 @@ def process_folder(folder_path, gpu_pool, model_path, save_image=False):
         net = load_model(net, trained_model, use_cpu)
         net.eval()
         print(f'GPU {cuda_id} 完成模型加载！')
-        cudnn.benchmark = True
+        # cudnn.benchmark = True
         device = torch.device(f"cuda:{cuda_id}")
         net = net.to(device)
 
@@ -211,13 +231,12 @@ def process_folder(folder_path, gpu_pool, model_path, save_image=False):
                 continue
 
             # 检测人脸
-            result = detect_face(face_path, net, device, cfg)
+            landmarks, score = detect_face(face_path, net, device, cfg)
 
             # 判断检测结果并记录
-            if result is None:
+            if landmarks is None:
                 fail_results.append(face_path)
             else:
-                landmarks, score = result
                 # 置信度检查
                 if score < 0.5:
                     fail_results.append(face_path)
@@ -244,7 +263,7 @@ def process_folder(folder_path, gpu_pool, model_path, save_image=False):
                         cv2.circle(img_raw, (landmarks[8], landmarks[9]), 1, (255, 0, 0), 4)
 
                         os.makedirs('../face_result', exist_ok=True)
-                        name = os.path.join('../face_result', os.path.join('_'.join(face_path.split('\\')[-3:]) ))
+                        name = os.path.join('../face_result', os.path.join('_'.join(face_path.split('\\')[-3:])))
                         cv2.imwrite(name, img_raw)
 
         # 写入检测成功的结果
@@ -262,18 +281,6 @@ def process_folder(folder_path, gpu_pool, model_path, save_image=False):
         gpu_pool.put(cuda_id)
         print(f"GPU {cuda_id} 已释放回池中")
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='RetinaFace人脸检测和五点关键点提取')
-    parser.add_argument('--cuda_id', default=0, type=int, help='CUDA设备ID (默认: 0)')
-    parser.add_argument('--input_dir', default='../result_list', type=str, help='结果目录 (默认: ../result)')
-    parser.add_argument('--specific_folder', default='', type=str, help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)') #../result/group_0
-    parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
-    parser.add_argument('--model_path', default='./weights/retinaface_ResNet50_Final.pth', type=str, help='模型路径')
-    parser.add_argument('--save_image', default='False', type=str, help='保存图片')
-    parser.add_argument('--num_gpus', default=4, type=int, help='要使用的GPU数量 (默认: 4)')
-    parser.add_argument('--n_jobs', default=None, type=int, help='并行任务数 (默认: GPU数量)')
-
-    return parser.parse_args()
 
 def main():
     # 解析命令行参数
@@ -309,7 +316,7 @@ def main():
         input_dir = os.path.abspath(args.input_dir)
         print(f"将处理 {input_dir} 下的所有子目录")
         folders_to_process = [os.path.join(input_dir, d) for d in os.listdir(input_dir)
-                             if os.path.isdir(os.path.join(input_dir, d))]
+                              if os.path.isdir(os.path.join(input_dir, d))]
 
     # 过滤掉无效的文件夹
     valid_folders = []
@@ -345,6 +352,7 @@ def main():
     end_time = time.time()
     print(f"所有文件夹处理完成，总耗时: {end_time - start_time:.2f} 秒")
     print(f"成功处理文件夹数: {sum(results)}/{len(valid_folders)}")
+
 
 if __name__ == '__main__':
     main()

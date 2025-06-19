@@ -143,6 +143,9 @@ def process_folder(folder_path, gpu_pool, model_path, output_dir, batch_size, us
             face_detect_list = f.readlines()
         
         print(f"GPU {cuda_id}: 处理组 {group_dir}, 共 {len(face_detect_list)} 张人脸")
+        if len(face_detect_list) == 0:
+            print(f"组 {group_dir} 中没有人脸数据，跳过处理")
+            return 1
 
         img_paths = []
         landmarks = []
