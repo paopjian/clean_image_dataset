@@ -25,8 +25,8 @@ def process_group(group_path, group_name, output_dir):
     body_list = []
     face_small = []
     body_small = []
-    face_exception = []  # face异常
-    body_exception = []  # body异常
+    face_exception = []
+    body_exception = []
 
     # 新增变量记录图片数量
     face_count = 0
@@ -35,11 +35,17 @@ def process_group(group_path, group_name, output_dir):
     # 记录每个folder的各类图片计数
     folder_counts = {}
 
+    # 写入文件
+    prefix = group_name
+    # 为每个 group 创建单独的文件夹
+    group_output_dir = os.path.join(output_dir, prefix)
+    if not os.path.exists(group_output_dir):
+        os.makedirs(group_output_dir)
+
     # 确保组路径是绝对路径
-    position = mp.current_process()._identity[0] % 10
+    position = 0
     group_abs_path = os.path.abspath(group_path)
     with tqdm(os.listdir(group_abs_path), desc=f"{group_name}",
-              position=position,
               total=len(os.listdir(group_abs_path)),
               leave=True,
               file=open(f"progress_{group_name}.log", 'w', encoding='utf-8')) as pbar:
@@ -47,7 +53,6 @@ def process_group(group_path, group_name, output_dir):
             folder_path = os.path.join(group_abs_path, folder)
             if not os.path.isdir(folder_path):
                 continue
-
             # 初始化当前folder的计数
             folder_counts[folder] = {
                 'face_list': 0,
@@ -110,12 +115,25 @@ def process_group(group_path, group_name, output_dir):
                         body_count += len(image_paths)
                         folder_counts[folder]['body_list'] = len(image_paths)
 
-    # 写入文件
-    prefix = group_name
-    # 为每个 group 创建单独的文件夹
-    group_output_dir = os.path.join(output_dir, prefix)
-    if not os.path.exists(group_output_dir):
-        os.makedirs(group_output_dir)
+            with open(os.path.join(group_output_dir, "face_small.txt"), 'a', encoding='utf-8') as f:
+                f.write('\n'.join(face_small) + '\n')
+            with open(os.path.join(group_output_dir, "body_small.txt"), 'a', encoding='utf-8') as f:
+                f.write('\n'.join(body_small) + '\n')
+            with open(os.path.join(group_output_dir, "face_list.txt"), 'a', encoding='utf-8') as f:
+                f.write('\n'.join(face_list) + '\n')
+
+            with open(os.path.join(group_output_dir, "body_list.txt"), 'a', encoding='utf-8') as f:
+                f.write('\n'.join(body_list) + '\n')
+            with open(os.path.join(group_output_dir, "face_exception.txt"), 'a', encoding='utf-8') as f:
+                f.write('\n'.join(face_exception) + '\n')
+            with open(os.path.join(group_output_dir, "body_exception.txt"), 'a', encoding='utf-8') as f:
+                f.write('\n'.join(body_exception) + '\n')
+            face_list = []
+            body_list = []
+            face_small = []
+            body_small = []
+            face_exception = []
+            body_exception = []
 
     # 写入每个folder的统计信息
     with open(os.path.join(group_output_dir, "folder_counts.txt"), 'w', encoding='utf-8') as f:
@@ -124,19 +142,19 @@ def process_group(group_path, group_name, output_dir):
             f.write(f"{folder},{counts['face_list']},{counts['face_small']},{counts['face_exception']},"
                    f"{counts['body_list']},{counts['body_small']},{counts['body_exception']}\n")
 
-    # 使用前缀命名文件
-    with open(os.path.join(group_output_dir, "face_small.txt"), 'w', encoding='utf-8') as f:
-        f.write('\n'.join(face_small))
-    with open(os.path.join(group_output_dir, "body_small.txt"), 'w', encoding='utf-8') as f:
-        f.write('\n'.join(body_small))
-    with open(os.path.join(group_output_dir, "face_list.txt"), 'w', encoding='utf-8') as f:
-        f.write('\n'.join(face_list))
-    with open(os.path.join(group_output_dir, "body_list.txt"), 'w', encoding='utf-8') as f:
-        f.write('\n'.join(body_list))
-    with open(os.path.join(group_output_dir, "face_exception.txt"), 'w', encoding='utf-8') as f:
-        f.write('\n'.join(face_exception))
-    with open(os.path.join(group_output_dir, "body_exception.txt"), 'w', encoding='utf-8') as f:
-        f.write('\n'.join(body_exception))
+    # # 使用前缀命名文件
+    # with open(os.path.join(group_output_dir, "face_small.txt"), 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(face_small))
+    # with open(os.path.join(group_output_dir, "body_small.txt"), 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(body_small))
+    # with open(os.path.join(group_output_dir, "face_list.txt"), 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(face_list))
+    # with open(os.path.join(group_output_dir, "body_list.txt"), 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(body_list))
+    # with open(os.path.join(group_output_dir, "face_exception.txt"), 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(face_exception))
+    # with open(os.path.join(group_output_dir, "body_exception.txt"), 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(body_exception))
 
     elapsed_time = time.time() - start_time
     print(f"完成处理 {group_name}, 耗时: {elapsed_time:.2f}秒")
