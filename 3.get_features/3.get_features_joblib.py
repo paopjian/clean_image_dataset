@@ -3,10 +3,13 @@ import os
 import numpy as np
 import torch
 import argparse
-import  utils.net as net
+import utils.net as net
 from tqdm import tqdm
 from utils.dataloader import prepare_dataloader
 from collections import defaultdict
+import time
+from joblib import Parallel, delayed
+from multiprocessing import Manager
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
@@ -25,6 +28,8 @@ def parse_args():
                                                                                              'pre_norm_vector_add',
                                                                                              'concat'))
     parser.add_argument('--use_flip_test', type=str, default='True')
+    parser.add_argument('--num_gpus', default=4, type=int, help='要使用的GPU数量 (默认: 4)')
+    parser.add_argument('--n_jobs', default=None, type=int, help='并行任务数 (默认: GPU数量)')
 
     return parser.parse_args()
 
@@ -47,7 +52,7 @@ def l2_norm(input, axis=1):
     output = torch.div(input, norm)
     return output, norm
 
-def infer_images(model, img_paths, landmarks, batch_size, use_flip_test):
+def infer_images(model, img_paths, landmarks, batch_size, use_flip_test, device):
     print('total images : {}'.format(len(img_paths)))
 
     dataloader = prepare_dataloader(img_paths, landmarks, batch_size, num_workers=0, image_size=(112, 112))
@@ -58,7 +63,7 @@ def infer_images(model, img_paths, landmarks, batch_size, use_flip_test):
     with torch.no_grad():
         for images, idx in tqdm(dataloader):
 
-            feature = model(images.to("cuda:0"))
+            feature = model(images.to(device))
             if isinstance(feature, tuple):
                 feature, norm = feature
             else:
@@ -67,7 +72,7 @@ def infer_images(model, img_paths, landmarks, batch_size, use_flip_test):
             if use_flip_test:
                 # infer flipped image and fuse to make a single feature
                 fliped_images = torch.flip(images, dims=[3])
-                flipped_feature = model(fliped_images.to("cuda:0"))
+                flipped_feature = model(fliped_images.to(device))
                 if isinstance(flipped_feature, tuple):
                     flipped_feature, flipped_norm = flipped_feature
                 else:
@@ -96,44 +101,30 @@ def infer_images(model, img_paths, landmarks, batch_size, use_flip_test):
     return img_feats, norms
 
 
-def main():
-    # 解析命令行参数
-    args = parse_args()
-    
-    # 设置参数
-    use_cpu = args.cpu
-    
-    # 设置设备
-    torch.set_grad_enabled(False)
-    if not use_cpu and torch.cuda.is_available():
-        torch.cuda.set_device(args.cuda_id)
-    
-    # 加载模型 (这部分需要替换为特征提取模型的加载逻辑)
-    model = load_pretrained_model('ir_101')
-    device = torch.device("cpu" if use_cpu else f"cuda:{args.cuda_id}")
-    model = model.to(device)
+def process_folder(folder_path, gpu_pool, model_path, output_dir, batch_size, use_flip_test_str):
+    """
+    处理单个文件夹的函数，从GPU池中获取可用GPU
+    """
+    # 从GPU池中获取可用GPU ID
+    cuda_id = gpu_pool.get()
+    print(f"在 GPU {cuda_id} 上处理文件夹: {folder_path}")
 
-    # 获取输入目录路径
-    if args.specific_folder:
-        # 直接使用指定的文件夹路径
-        folders_to_process = [args.specific_folder]
-        print(f"将只处理指定文件夹: {args.specific_folder}")
-    else:
-        # 如果没有指定文件夹，使用input_dir下的所有子目录
-        input_dir = os.path.abspath(args.input_dir)
-        print(f"将处理 {input_dir} 下的所有子目录")
-        folders_to_process = [os.path.join(input_dir, d) for d in os.listdir(input_dir) 
-                             if os.path.isdir(os.path.join(input_dir, d))]
-    
-    # 确保输出目录存在
-    output_dir = os.path.abspath(args.output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    for folder_path in folders_to_process:
-        if not os.path.isdir(folder_path):
-            print(f"跳过非目录: {folder_path}")
-            continue
-        
+    try:
+        # 设置参数
+        use_cpu = False
+        use_flip_test = use_flip_test_str.lower() == 'true'
+
+        # 设置设备
+        torch.set_grad_enabled(False)
+        if torch.cuda.is_available():
+            torch.cuda.set_device(cuda_id)
+
+        # 加载模型
+        model = load_pretrained_model('ir_101')
+        device = torch.device(f"cuda:{cuda_id}")
+        model = model.to(device)
+        print(f'GPU {cuda_id} 完成模型加载！')
+
         # 获取文件夹名称作为组名
         group_dir = os.path.basename(folder_path)
         
@@ -144,14 +135,14 @@ def main():
         # 读取face_detect.txt文件，这个文件包含已成功检测的人脸图像及其关键点
         face_detect_file = os.path.join(folder_path, "face_detect.txt")
         if not os.path.exists(face_detect_file):
-            print(f"未找到文件: {face_detect_file}")
-            continue
-        
+            print(f"GPU {cuda_id}: 未找到文件: {face_detect_file}")
+            return 0
+
         # 读取face_detect文件中的人脸图像路径和关键点信息
         with open(face_detect_file, 'r', encoding='utf-8') as f:
             face_detect_list = f.readlines()
         
-        print(f"处理组 {group_dir}, 共 {len(face_detect_list)} 张人脸")
+        print(f"GPU {cuda_id}: 处理组 {group_dir}, 共 {len(face_detect_list)} 张人脸")
 
         img_paths = []
         landmarks = []
@@ -169,7 +160,7 @@ def main():
             faceness_scores.append(faceness_score)
 
         img_input_feats, _ = infer_images(model=model, img_paths=img_paths, landmarks=landmarks,
-                                                 batch_size=args.batch_size, use_flip_test=args.use_flip_test)
+                                         batch_size=batch_size, use_flip_test=use_flip_test, device=device)
         # features_normalized = img_input_feats * norms
         features_normalized = img_input_feats
         # 将图片按组号分组
@@ -180,11 +171,11 @@ def main():
             group_id = path_parts[-3]  # 例如从 J:\work\clean\data\group_0\0000045\face\014.jpg 提取 0000045
             group_dict[group_id].append((i, img_path, features_normalized[i]))
         
-        print(f"共找到 {len(group_dict)} 个不同的组")
-        
+        print(f"GPU {cuda_id}: 共找到 {len(group_dict)} 个不同的组")
+
         # 为每个组分别处理，创建组目录
         for group_id, group_items in group_dict.items():
-            print(f"处理组 {group_id}，共 {len(group_items)} 张图片")
+            print(f"GPU {cuda_id}: 处理组 {group_id}，共 {len(group_items)} 张图片")
             if len(group_items) < 2:
                 continue  # 如果组内只有一张图片，跳过
             
@@ -227,8 +218,8 @@ def main():
             base_idx = max(similar_count, key=similar_count.get)
             base_path = group_paths[base_idx]
             
-            print(f"组 {group_id} 的基准图片是 {base_path}，有 {similar_count[base_idx]} 张相似图片")
-            
+            print(f"GPU {cuda_id}: 组 {group_id} 的基准图片是 {base_path}，有 {similar_count[base_idx]} 张相似图片")
+
             # 将图片分为相关和不相关两组
             related_images = []
             unrelated_images = []
@@ -286,9 +277,87 @@ def main():
                 for img, sim in unrelated_similarities:
                     f.write(f"{img} {sim:.6f}\n")
             
-            print(f"组 {group_id} 处理完成")
-            print(f"- 相关图片: {len(related_images)}，平均相似度：{avg_related_similarity:.4f}")
-            print(f"- 不相关图片: {len(unrelated_images)}，平均相似度：{avg_unrelated_similarity:.4f}")
+            print(f"GPU {cuda_id}: 组 {group_id} 处理完成")
+            print(f"GPU {cuda_id}: - 相关图片: {len(related_images)}，平均相似度：{avg_related_similarity:.4f}")
+            print(f"GPU {cuda_id}: - 不相关图片: {len(unrelated_images)}，平均相似度：{avg_unrelated_similarity:.4f}")
+
+        return 1
+    finally:
+        # 无论处理是否成功，都将GPU ID放回池中
+        gpu_pool.put(cuda_id)
+        print(f"GPU {cuda_id} 已释放回池中")
+
+
+def main():
+    # 解析命令行参数
+    args = parse_args()
+
+    # 确定可用的GPU数量
+    available_gpus = min(args.num_gpus, torch.cuda.device_count()) if torch.cuda.is_available() else 0
+
+    if available_gpus == 0:
+        print("警告：没有可用的GPU，将使用CPU模式")
+        args.cpu = True
+    else:
+        print(f"检测到 {available_gpus} 个可用GPU")
+
+    # 如果使用CPU，不使用多进程
+    if args.cpu:
+        print("使用CPU模式，将不启用多GPU并行处理")
+        # 这里应该添加CPU处理逻辑
+        return
+
+    # 设置并行任务数
+    n_jobs = args.n_jobs if args.n_jobs is not None else available_gpus
+
+    # 获取输入目录路径
+    if args.specific_folder:
+        # 直接使用指定的文件夹路径
+        folders_to_process = [args.specific_folder]
+        print(f"将只处理指定文件夹: {args.specific_folder}")
+    else:
+        # 如果没有指定文件夹，使用input_dir下的所有子目录
+        input_dir = os.path.abspath(args.input_dir)
+        print(f"将处理 {input_dir} 下的所有子目录")
+        folders_to_process = [os.path.join(input_dir, d) for d in os.listdir(input_dir)
+                             if os.path.isdir(os.path.join(input_dir, d))]
+
+    # 过滤掉无效的文件夹
+    valid_folders = []
+    for folder in folders_to_process:
+        if os.path.isdir(folder) and os.path.exists(os.path.join(folder, "face_detect.txt")):
+            valid_folders.append(folder)
+        else:
+            print(f"跳过无效文件夹: {folder}")
+
+    # 确保输出目录存在
+    output_dir = os.path.abspath(args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"将处理 {len(valid_folders)} 个有效文件夹")
+    if not valid_folders:
+        print("没有有效的文件夹可处理，退出")
+        return
+
+    # 创建GPU ID池
+    manager = Manager()
+    gpu_pool = manager.Queue()
+
+    # 初始化GPU池，将所有可用的GPU ID放入池中
+    for i in range(available_gpus):
+        gpu_pool.put(i)
+
+    # 使用joblib进行并行处理
+    start_time = time.time()
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(process_folder)(folder, gpu_pool, args.model_path, output_dir, args.batch_size, args.use_flip_test)
+        for folder in valid_folders
+    )
+
+    end_time = time.time()
+    print(f"所有文件夹处理完成，总耗时: {end_time - start_time:.2f} 秒")
+    print(f"成功处理文件夹数: {sum(results)}/{len(valid_folders)}")
+
 
 if __name__ == '__main__':
     main()

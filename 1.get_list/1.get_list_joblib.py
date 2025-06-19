@@ -1,10 +1,14 @@
+print("这个是多进程版本,注意有进程创建开销,如果数据量小,建议使用1.get_list.py")
 import os
 import argparse
 from PIL import Image
+from joblib import Parallel, delayed
 import time
+
 
 def is_image_file(filename):
     return filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif'))
+
 
 def get_image_size(path):
     try:
@@ -12,6 +16,7 @@ def get_image_size(path):
             return img.size
     except Exception:
         return None
+
 
 def process_group(group_path, group_name, output_dir):
     start_time = time.time()
@@ -132,11 +137,13 @@ def process_group(group_path, group_name, output_dir):
     print(f"Face图片: {face_count}张, Body图片: {body_count}张")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="处理数据集中的图片并生成报告")
     parser.add_argument('--data_dir', type=str, default='../data', help='包含所有 group 的数据目录路径')
     parser.add_argument('--output_dir', type=str, default='../result_list', help='输出结果的目录路径')
     parser.add_argument('--group', type=str, help='指定处理的单个 group (例如 group_0)，不指定则处理所有group')
+    parser.add_argument('--n_jobs', type=int, default=-1, help='使用的进程数，默认使用所有CPU核心')
+    parser.add_argument('--verbose', type=int, default=1, help='显示进度信息的级别')
     args = parser.parse_args()
 
     # 确保使用绝对路径
@@ -149,6 +156,9 @@ if __name__ == "__main__":
 
     print(f"数据目录: {data_dir}")
     print(f"输出目录: {output_dir}")
+    print(f"使用进程数: {'全部' if args.n_jobs == -1 else args.n_jobs}")
+
+    start_time = time.time()
 
     # 处理指定的单个group或所有group
     if args.group:
@@ -159,11 +169,23 @@ if __name__ == "__main__":
         else:
             print(f"错误：找不到 {group_path}")
     else:
-        # 处理所有group
+        # 获取所有需要处理的group
+        groups = []
         for group in os.listdir(data_dir):
             group_path = os.path.join(data_dir, group)
             if os.path.isdir(group_path) and group.startswith('group_'):
-                print(f"处理 {group}...")
-                process_group(group_path, group, output_dir)
+                groups.append((group_path, group, output_dir))
 
-    print("处理完成。")
+        # 使用joblib并行处理
+        Parallel(n_jobs=args.n_jobs, verbose=args.verbose)(
+            delayed(process_group)(group_path, group_name, output_dir)
+            for group_path, group_name, output_dir in groups
+        )
+
+    total_time = time.time() - start_time
+    print(f"所有处理完成。总耗时: {total_time:.2f}秒")
+
+
+if __name__ == "__main__":
+
+    main()
