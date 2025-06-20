@@ -21,7 +21,11 @@ def parse_args():
     parser.add_argument('--output_dir', type=str, default='../result', help='结果目录')
     parser.add_argument('--specific_folder', default='', type=str, help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')
     parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
-    parser.add_argument('--model_path', default='./weights/model.pth', type=str, help='特征提取模型路径')
+    parser.add_argument('--arch', default='ir_101', type=str, help='模型结构')
+    parser.add_argument('--model_path', default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                             './weights/pretrained/adaface_ir101_webface12m.ckpt'),
+                        type=str,
+                        help='模型路径')
     parser.add_argument('--batch_size', default='128', type=int, help='批数量')
     parser.add_argument('--fusion_method', type=str, default='pre_norm_vector_add', choices=('average',
                                                                                              'norm_weighted_avg',
@@ -33,13 +37,11 @@ def parse_args():
 
     return parser.parse_args()
 
-def load_pretrained_model(architecture='ir_101'):
-    adaface_models = {
-        'ir_101': "pretrained/adaface_ir101_webface12m.ckpt",
-    }
+
+def load_pretrained_model(args):
     # load model and pretrained statedict
-    model = net.build_model(architecture)
-    statedict = torch.load(adaface_models[architecture])['state_dict']
+    model = net.build_model(args.arch)
+    statedict = torch.load(args.model_path)['state_dict']
     model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
     model.load_state_dict(model_statedict)
     model.eval()
@@ -101,7 +103,7 @@ def infer_images(model, img_paths, landmarks, batch_size, use_flip_test, device)
     return img_feats, norms
 
 
-def process_folder(folder_path, gpu_pool, model_path, output_dir, batch_size, use_flip_test_str):
+def process_folder(folder_path, gpu_pool, args, output_dir, batch_size, use_flip_test_str):
     """
     处理单个文件夹的函数，从GPU池中获取可用GPU
     """
@@ -120,7 +122,7 @@ def process_folder(folder_path, gpu_pool, model_path, output_dir, batch_size, us
             torch.cuda.set_device(cuda_id)
 
         # 加载模型
-        model = load_pretrained_model('ir_101')
+        model = load_pretrained_model(args)
         device = torch.device(f"cuda:{cuda_id}")
         model = model.to(device)
         print(f'GPU {cuda_id} 完成模型加载！')
@@ -353,7 +355,7 @@ def main():
     # 使用joblib进行并行处理
     start_time = time.time()
     results = Parallel(n_jobs=n_jobs, backend="loky")(
-        delayed(process_folder)(folder, gpu_pool, args.model_path, output_dir, args.batch_size, args.use_flip_test)
+        delayed(process_folder)(folder, gpu_pool, args, output_dir, args.batch_size, args.use_flip_test)
         for folder in valid_folders
     )
 

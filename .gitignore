@@ -6,3 +6,4 @@ result_list
 /2.get_landmark/weights/retinaface_Resnet50_Final.pth
 __pycache__/
 *.pyc
+temp_log/

@@ -5,7 +5,17 @@ from PIL import Image
 from joblib import Parallel, delayed
 import time
 from tqdm import tqdm
-import multiprocessing as mp
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="处理数据集中的图片并生成报告")
+    parser.add_argument('--data_dir', type=str, default='../data', help='包含所有 group 的数据目录路径')
+    parser.add_argument('--output_dir', type=str, default='../result_list', help='输出结果的目录路径')
+    parser.add_argument('--group', type=str, help='指定处理的单个 group (例如 group_0)，不指定则处理所有group')
+    parser.add_argument('--n_jobs', type=int, default=2, help='使用的进程数，默认使用所有CPU核心')
+    parser.add_argument('--verbose', type=int, default=1, help='显示进度信息的级别')
+    args = parser.parse_args()
+    return args
 
 def is_image_file(filename):
     return filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.gif'))
@@ -26,7 +36,7 @@ def write_to_file(file_path, data_list, mode):
             f.write('\n'.join(data_list) + '\n')
 
 
-def process_group(group_path, group_name, output_dir):
+def process_group(group_path, group_dir, output_dir):
     start_time = time.time()
     face_list = []
     body_list = []
@@ -43,18 +53,28 @@ def process_group(group_path, group_name, output_dir):
     folder_counts = {}
 
     # 写入文件
-    prefix = group_name
+    prefix = group_dir
     # 为每个 group 创建单独的文件夹
     group_output_dir = os.path.join(output_dir, prefix)
     if not os.path.exists(group_output_dir):
         os.makedirs(group_output_dir)
+    else:
+        # 目录已经存在,直接跳过
+        print(f"{group_dir} 目录已存在，跳过处理。")
+        return 1
+
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    temp_log_dir = os.path.join(script_dir, "temp_log")
+    os.makedirs(temp_log_dir, exist_ok=True)
 
     # 确保组路径是绝对路径
     group_abs_path = os.path.abspath(group_path)
-    with tqdm(os.listdir(group_abs_path), desc=f"{group_name}",
+
+    with tqdm(os.listdir(group_abs_path), desc=f"{group_dir}",
               total=len(os.listdir(group_abs_path)),
               leave=True,
-              file=open(f"progress_{group_name}.log", 'w', encoding='utf-8')) as pbar:
+              file=open(os.path.join(temp_log_dir, f"progress_{group_dir}.log"), 'w', encoding='utf-8')) as pbar:
         for folder in pbar:
             folder_path = os.path.join(group_abs_path, folder)
             if not os.path.isdir(folder_path):
@@ -156,18 +176,12 @@ def process_group(group_path, group_name, output_dir):
     #     f.write('\n'.join(body_exception))
 
     elapsed_time = time.time() - start_time
-    print(f"完成处理 {group_name}, 耗时: {elapsed_time:.2f}秒")
+    print(f"完成处理 {group_dir}, 耗时: {elapsed_time:.2f}秒")
     print(f"Face图片: {face_count}张, Body图片: {body_count}张")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="处理数据集中的图片并生成报告")
-    parser.add_argument('--data_dir', type=str, default='../data', help='包含所有 group 的数据目录路径')
-    parser.add_argument('--output_dir', type=str, default='../result_list', help='输出结果的目录路径')
-    parser.add_argument('--group', type=str, help='指定处理的单个 group (例如 group_0)，不指定则处理所有group')
-    parser.add_argument('--n_jobs', type=int, default=2, help='使用的进程数，默认使用所有CPU核心')
-    parser.add_argument('--verbose', type=int, default=1, help='显示进度信息的级别')
-    args = parser.parse_args()
+    args = parse_args()
 
     # 确保使用绝对路径
     data_dir = os.path.abspath(args.data_dir)
@@ -201,8 +215,8 @@ def main():
 
         # 使用joblib并行处理
         Parallel(n_jobs=args.n_jobs, verbose=args.verbose)(
-            delayed(process_group)(group_path, group_name, output_dir)
-            for group_path, group_name, output_dir in groups
+            delayed(process_group)(group_path, group_dir, output_dir)
+            for group_path, group_dir, output_dir in groups
         )
 
     total_time = time.time() - start_time

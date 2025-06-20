@@ -10,6 +10,7 @@ from utils.nms.py_cpu_nms import py_cpu_nms
 import cv2
 from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
+from tqdm import tqdm
 
 
 def parse_args():
@@ -19,7 +20,9 @@ def parse_args():
     parser.add_argument('--specific_folder', default='', type=str,
                         help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')  # ../result/group_0
     parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
-    parser.add_argument('--model_path', default='./weights/retinaface_Resnet50_Final.pth', type=str, help='模型路径')
+    parser.add_argument('--model_path', default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                             './weights/retinaface_Resnet50_Final.pth'), type=str,
+                        help='模型路径')
     parser.add_argument('--save_image', default='True', type=str, help='保存图片')
 
     return parser.parse_args()
@@ -205,8 +208,19 @@ def main():
         print(f"将处理 {input_dir} 下的所有子目录")
         folders_to_process = [os.path.join(input_dir, d) for d in os.listdir(input_dir)
                               if os.path.isdir(os.path.join(input_dir, d))]
+    valid_folders = []
+    for folder in folders_to_process:
+        # 已经存在face_detect.txt的文件夹不再处理
+        if os.path.isdir(folder) and os.path.exists(os.path.join(folder, "face_detect.txt")):
+            print(f"跳过已处理的文件夹: {folder}")
+            continue
+        # 检查文件夹是否存在face_list.txt
+        if os.path.isdir(folder) and os.path.exists(os.path.join(folder, "face_list.txt")):
+            valid_folders.append(folder)
+        else:
+            print(f"跳过无效文件夹: {folder}")
 
-    for folder_path in folders_to_process:
+    for folder_path in valid_folders:
         if not os.path.isdir(folder_path):
             print(f"跳过非目录: {folder_path}")
             continue
@@ -233,41 +247,49 @@ def main():
 
         print(f"处理组 {group_dir}, 共 {len(face_list)} 张图像")
 
-        for face_path in face_list:
-            face_path = face_path.strip()
-            if not face_path:
-                continue
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        temp_log_dir = os.path.join(script_dir, "temp_log")
+        os.makedirs(temp_log_dir, exist_ok=True)
+        with tqdm(face_list, desc=f"{group_dir}",
+                  total=len(face_list),
+                  leave=True,
+                  file=open(os.path.join(temp_log_dir, f"progress_{group_dir}.log"), 'w', encoding='utf-8')) as pbar:
 
-            # 检测人脸
-            landmarks, score = detect_face(face_path, net, device, cfg)
+            for face_path in pbar:
+                face_path = face_path.strip()
+                if not face_path:
+                    continue
 
-            # 判断检测结果并记录
-            if landmarks is None or score < 0.5:
-                fail_results.append(face_path)
-                # print(f"未能检测到人脸/置信度低: {face_path}")
-            else:
-                # 将五点坐标格式化为字符串
-                landmarks_str = ' '.join([f"{point:.1f}" for point in landmarks])
-                detect_results.append(f"{face_path} {landmarks_str} {score:.4f}")
-                # print(f"成功检测人脸: {face_path}")
+                # 检测人脸
+                landmarks, score = detect_face(face_path, net, device, cfg)
 
-                if args.save_image:
-                    text = "{:.4f}".format(score)
+                # 判断检测结果并记录
+                if landmarks is None or score < 0.5:
+                    fail_results.append(face_path)
+                    # print(f"未能检测到人脸/置信度低: {face_path}")
+                else:
+                    # 将五点坐标格式化为字符串
+                    landmarks_str = ' '.join([f"{point:.1f}" for point in landmarks])
+                    detect_results.append(f"{face_path} {landmarks_str} {score:.4f}")
+                    # print(f"成功检测人脸: {face_path}")
 
-                    img_raw = cv2.imread(face_path, cv2.IMREAD_COLOR)
+                    if args.save_image:
+                        text = "{:.4f}".format(score)
 
-                    landmarks = list(map(int, landmarks))
-                    cv2.putText(img_raw, text, (0, 0),
-                                cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
+                        img_raw = cv2.imread(face_path, cv2.IMREAD_COLOR)
 
-                    cv2.circle(img_raw, (landmarks[0], landmarks[1]), 1, (0, 0, 255), 4)
-                    cv2.circle(img_raw, (landmarks[2], landmarks[3]), 1, (0, 255, 255), 4)
-                    cv2.circle(img_raw, (landmarks[4], landmarks[5]), 1, (255, 0, 255), 4)
-                    cv2.circle(img_raw, (landmarks[6], landmarks[7]), 1, (0, 255, 0), 4)
-                    cv2.circle(img_raw, (landmarks[8], landmarks[9]), 1, (255, 0, 0), 4)
+                        landmarks = list(map(int, landmarks))
+                        cv2.putText(img_raw, text, (0, 0),
+                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
 
-                    name = os.path.join('../face_result', os.path.join('_'.join(face_path.split('\\')[-3:])))
-                    cv2.imwrite(name, img_raw)
+                        cv2.circle(img_raw, (landmarks[0], landmarks[1]), 1, (0, 0, 255), 4)
+                        cv2.circle(img_raw, (landmarks[2], landmarks[3]), 1, (0, 255, 255), 4)
+                        cv2.circle(img_raw, (landmarks[4], landmarks[5]), 1, (255, 0, 255), 4)
+                        cv2.circle(img_raw, (landmarks[6], landmarks[7]), 1, (0, 255, 0), 4)
+                        cv2.circle(img_raw, (landmarks[8], landmarks[9]), 1, (255, 0, 0), 4)
+
+                        name = os.path.join('../face_result', os.path.join('_'.join(face_path.split('\\')[-3:])))
+                        cv2.imwrite(name, img_raw)
 
         # 写入检测成功的结果
         with open(detect_file, 'w', encoding='utf-8') as f:
