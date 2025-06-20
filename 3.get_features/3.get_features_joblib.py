@@ -11,7 +11,8 @@ import time
 from joblib import Parallel, delayed
 from multiprocessing import Manager
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 
 def parse_args():
@@ -19,11 +20,12 @@ def parse_args():
     parser.add_argument('--cuda_id', default=0, type=int, help='CUDA设备ID (默认: 0)')
     parser.add_argument('--input_dir', default='../result_list', type=str, help='结果目录 (默认: ../result)')
     parser.add_argument('--output_dir', type=str, default='../result', help='结果目录')
-    parser.add_argument('--specific_folder', default='', type=str, help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')
+    parser.add_argument('--specific_folder', default='', type=str,
+                        help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')
     parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
     parser.add_argument('--arch', default='ir_101', type=str, help='模型结构')
     parser.add_argument('--model_path', default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                             './weights/pretrained/adaface_ir101_webface12m.ckpt'),
+                                                             './pretrained/adaface_ir101_webface12m.ckpt'),
                         type=str,
                         help='模型路径')
     parser.add_argument('--batch_size', default='128', type=int, help='批数量')
@@ -42,10 +44,11 @@ def load_pretrained_model(args):
     # load model and pretrained statedict
     model = net.build_model(args.arch)
     statedict = torch.load(args.model_path)['state_dict']
-    model_statedict = {key[6:]:val for key, val in statedict.items() if key.startswith('model.')}
+    model_statedict = {key[6:]: val for key, val in statedict.items() if key.startswith('model.')}
     model.load_state_dict(model_statedict)
     model.eval()
     return model
+
 
 def l2_norm(input, axis=1):
     """l2 normalize
@@ -54,44 +57,53 @@ def l2_norm(input, axis=1):
     output = torch.div(input, norm)
     return output, norm
 
-def infer_images(model, img_paths, landmarks, batch_size, use_flip_test, device):
-    print('total images : {}'.format(len(img_paths)))
+
+def infer_images(model, img_paths, landmarks, batch_size, use_flip_test, device, group_dir):
+    # print('total images : {}'.format(len(img_paths)))
 
     dataloader = prepare_dataloader(img_paths, landmarks, batch_size, num_workers=0, image_size=(112, 112))
 
     model.eval()
     features = []
     norms = []
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    temp_log_dir = os.path.join(script_dir, "temp_log")
+    os.makedirs(temp_log_dir, exist_ok=True)
+
     with torch.no_grad():
-        for images, idx in tqdm(dataloader):
-
-            feature = model(images.to(device))
-            if isinstance(feature, tuple):
-                feature, norm = feature
-            else:
-                norm = None
-
-            if use_flip_test:
-                # infer flipped image and fuse to make a single feature
-                fliped_images = torch.flip(images, dims=[3])
-                flipped_feature = model(fliped_images.to(device))
-                if isinstance(flipped_feature, tuple):
-                    flipped_feature, flipped_norm = flipped_feature
+        with tqdm(dataloader, desc=f"infer {group_dir}",
+                  total=len(dataloader),
+                  leave=True,
+                  file=open(os.path.join(temp_log_dir, f"progress_{group_dir}.log"), 'w', encoding='utf-8')) as pbar:
+            for images, idx in pbar:
+                feature = model(images.to(device))
+                if isinstance(feature, tuple):
+                    feature, norm = feature
                 else:
-                    flipped_norm = None
+                    norm = None
 
-                stacked_embeddings = torch.stack([feature, flipped_feature], dim=0)
-                if norm is not None:
-                    stacked_norms = torch.stack([norm, flipped_norm], dim=0)
-                else:
-                    stacked_norms = None
+                if use_flip_test:
+                    # infer flipped image and fuse to make a single feature
+                    fliped_images = torch.flip(images, dims=[3])
+                    flipped_feature = model(fliped_images.to(device))
+                    if isinstance(flipped_feature, tuple):
+                        flipped_feature, flipped_norm = flipped_feature
+                    else:
+                        flipped_norm = None
 
-                pre_norm_embeddings = stacked_embeddings * stacked_norms
-                fused = pre_norm_embeddings.sum(dim=0)
-                feature, norm = l2_norm(fused, axis=1)
+                    stacked_embeddings = torch.stack([feature, flipped_feature], dim=0)
+                    if norm is not None:
+                        stacked_norms = torch.stack([norm, flipped_norm], dim=0)
+                    else:
+                        stacked_norms = None
 
-            features.append(feature.cpu().numpy())
-            norms.append(norm.cpu().numpy())
+                    pre_norm_embeddings = stacked_embeddings * stacked_norms
+                    fused = pre_norm_embeddings.sum(dim=0)
+                    feature, norm = l2_norm(fused, axis=1)
+
+                features.append(feature.cpu().numpy())
+                norms.append(norm.cpu().numpy())
 
     features = np.concatenate(features, axis=0)
     img_feats = np.array(features).astype(np.float32)
@@ -129,11 +141,11 @@ def process_folder(folder_path, gpu_pool, args, output_dir, batch_size, use_flip
 
         # 获取文件夹名称作为组名
         group_dir = os.path.basename(folder_path)
-        
+
         # 创建输出目录
         output_folder_path = os.path.join(output_dir, group_dir)
         os.makedirs(output_folder_path, exist_ok=True)
-            
+
         # 读取face_detect.txt文件，这个文件包含已成功检测的人脸图像及其关键点
         face_detect_file = os.path.join(folder_path, "face_detect.txt")
         if not os.path.exists(face_detect_file):
@@ -143,8 +155,8 @@ def process_folder(folder_path, gpu_pool, args, output_dir, batch_size, use_flip
         # 读取face_detect文件中的人脸图像路径和关键点信息
         with open(face_detect_file, 'r', encoding='utf-8') as f:
             face_detect_list = f.readlines()
-        
-        print(f"GPU {cuda_id}: 处理组 {group_dir}, 共 {len(face_detect_list)} 张人脸")
+
+        # print(f"GPU {cuda_id}: 处理组 {group_dir}, 共 {len(face_detect_list)} 张人脸")
         if len(face_detect_list) == 0:
             print(f"组 {group_dir} 中没有人脸数据，跳过处理")
             return 1
@@ -157,15 +169,24 @@ def process_folder(folder_path, gpu_pool, args, output_dir, batch_size, use_flip
 
             img_paths.append(parts[0])
 
-            lmk = np.array([float(x) for x in parts[1:-1]],dtype=np.float32)
+            lmk = np.array([float(x) for x in parts[1:-1]], dtype=np.float32)
             lmk = lmk.reshape((5, 2))
             landmarks.append(lmk)
 
             faceness_score = float(parts[11]) if len(parts) > 11 else 1.0
             faceness_scores.append(faceness_score)
 
-        img_input_feats, _ = infer_images(model=model, img_paths=img_paths, landmarks=landmarks,
-                                         batch_size=batch_size, use_flip_test=use_flip_test, device=device)
+        #  检查存在img_input_feats.npy文件
+        feature_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_log',
+                                    f'img_input_feats_{group_dir}.npy')
+        if os.path.exists(feature_path):
+            print(f"已存在特征文件: {feature_path}，直接加载")
+            img_input_feats = np.load(feature_path)
+        else:
+            img_input_feats, _ = infer_images(model=model, img_paths=img_paths, landmarks=landmarks,
+                                              batch_size=batch_size, use_flip_test=use_flip_test, device=device,
+                                              group_dir=group_dir)
+            np.save(feature_path, img_input_feats)
         # features_normalized = img_input_feats * norms
         features_normalized = img_input_feats
         # 将图片按组号分组
@@ -175,38 +196,38 @@ def process_folder(folder_path, gpu_pool, args, output_dir, batch_size, use_flip
             path_parts = img_path.split(os.sep)
             group_id = path_parts[-3]  # 例如从 J:\work\clean\data\group_0\0000045\face\014.jpg 提取 0000045
             group_dict[group_id].append((i, img_path, features_normalized[i]))
-        
-        print(f"GPU {cuda_id}: 共找到 {len(group_dict)} 个不同的组")
+
+        # print(f"GPU {cuda_id}: 共找到 {len(group_dict)} 个不同的组")
 
         # 为每个组分别处理，创建组目录
         for group_id, group_items in group_dict.items():
-            print(f"GPU {cuda_id}: 处理组 {group_id}，共 {len(group_items)} 张图片")
+            # print(f"GPU {cuda_id}: 处理组 {group_id}，共 {len(group_items)} 张图片")
             if len(group_items) < 2:
                 continue  # 如果组内只有一张图片，跳过
-            
+
             # 为当前组创建目录（在输出目录中）
             group_folder = os.path.join(output_folder_path, group_id)
             os.makedirs(group_folder, exist_ok=True)
-            
+
             # 创建该组的输出文件路径（在输出目录中）
             group_images_file = os.path.join(group_folder, "related_images.txt")
             unrelated_images_file = os.path.join(group_folder, "unrelated_images.txt")
             # 创建相似度记录文件
             related_similarity_file = os.path.join(group_folder, "related_similarity.txt")
             unrelated_similarity_file = os.path.join(group_folder, "unrelated_similarity.txt")
-            
+
             # 为该组内的所有图片提取特征
             group_indices = [item[0] for item in group_items]
             group_paths = [item[1] for item in group_items]
             group_features = np.array([item[2] for item in group_items])
-            
+
             # 计算该组内的相似度矩阵
             group_features_tensor = torch.from_numpy(group_features)
             # 对特征进行L2归一化，确保余弦相似度计算正确
             group_features_normalized = torch.nn.functional.normalize(group_features_tensor, p=2, dim=1)
             # 计算余弦相似度矩阵
             group_similarity = group_features_normalized @ group_features_normalized.T
-            
+
             # 计算每张图片的相似图片数量（相似度大于0.2的）
             similar_count = defaultdict(int)
             for i in range(len(group_items)):
@@ -215,76 +236,77 @@ def process_folder(folder_path, gpu_pool, args, output_dir, batch_size, use_flip
                         similarity = group_similarity[i, j].item()
                         if similarity >= 0.2:
                             similar_count[i] += 1
-            
+
             # 找出具有最多相似图片的那张图片作为基准
             if not similar_count:  # 如果没有相似图片，继续下一组
                 continue
-                
+
             base_idx = max(similar_count, key=similar_count.get)
             base_path = group_paths[base_idx]
-            
-            print(f"GPU {cuda_id}: 组 {group_id} 的基准图片是 {base_path}，有 {similar_count[base_idx]} 张相似图片")
+
+            # print(f"GPU {cuda_id}: 组 {group_id} 的基准图片是 {base_path}，有 {similar_count[base_idx]} 张相似图片")
 
             # 将图片分为相关和不相关两组
             related_images = []
             unrelated_images = []
             related_similarities = []
             unrelated_similarities = []
-            
+
             # 将基准图片添加到相关图片列表(与自身的相似度为1.0)
             base_filename = os.path.basename(base_path)
             related_images.append(base_filename)
             related_similarities.append((base_filename, 1.0))
-            
+
             # 将其他图片与基准图片比较
             for i, path in enumerate(group_paths):
                 if i == base_idx:
                     continue  # 跳过基准图片自身
-                
+
                 similarity = group_similarity[base_idx, i].item()
                 filename = os.path.basename(path)
-                
+
                 if similarity >= 0.2:  # 相似度 >= 0.2 的都归为相关图片
                     related_images.append(filename)
                     related_similarities.append((filename, similarity))
                 else:
                     unrelated_images.append(filename)
                     unrelated_similarities.append((filename, similarity))
-            
+
             # 计算相关图片的平均相似度
             avg_related_similarity = 0.0
             if len(related_similarities) > 1:  # 排除基准图片自身
-                avg_related_similarity = sum(sim for _, sim in related_similarities[1:]) / (len(related_similarities) - 1)
-            
+                avg_related_similarity = sum(sim for _, sim in related_similarities[1:]) / (
+                        len(related_similarities) - 1)
+
             # 计算不相关图片的平均相似度
             avg_unrelated_similarity = 0.0
             if len(unrelated_similarities) > 0:
                 avg_unrelated_similarity = sum(sim for _, sim in unrelated_similarities) / len(unrelated_similarities)
-            
+
             # 写入结果到文件 - 只包含文件名列表
             with open(group_images_file, 'w', encoding='utf-8') as f:
                 for img in related_images:
                     f.write(f"{img}\n")
-            
+
             with open(unrelated_images_file, 'w', encoding='utf-8') as f:
                 for img in unrelated_images:
                     f.write(f"{img}\n")
-            
+
             # 写入相似度信息文件
             with open(related_similarity_file, 'w', encoding='utf-8') as f:
                 f.write(f"{avg_related_similarity:.6f}\n")  # 第一行写平均相似度
                 for img, sim in related_similarities:
                     f.write(f"{img} {sim:.6f}\n")
-            
+
             with open(unrelated_similarity_file, 'w', encoding='utf-8') as f:
                 f.write(f"{avg_unrelated_similarity:.6f}\n")  # 第一行写平均相似度
-                f.write(f"{related_similarities[0][0]} {related_similarities[0][1]:.6f}\n") # 第二行是基准图片
+                f.write(f"{related_similarities[0][0]} {related_similarities[0][1]:.6f}\n")  # 第二行是基准图片
                 for img, sim in unrelated_similarities:
                     f.write(f"{img} {sim:.6f}\n")
-            
-            print(f"GPU {cuda_id}: 组 {group_id} 处理完成")
-            print(f"GPU {cuda_id}: - 相关图片: {len(related_images)}，平均相似度：{avg_related_similarity:.4f}")
-            print(f"GPU {cuda_id}: - 不相关图片: {len(unrelated_images)}，平均相似度：{avg_unrelated_similarity:.4f}")
+
+            # print(f"GPU {cuda_id}: 组 {group_id} 处理完成")
+            # print(f"GPU {cuda_id}: - 相关图片: {len(related_images)}，平均相似度：{avg_related_similarity:.4f}")
+            # print(f"GPU {cuda_id}: - 不相关图片: {len(unrelated_images)}，平均相似度：{avg_unrelated_similarity:.4f}")
 
         return 1
     finally:
@@ -325,7 +347,7 @@ def main():
         input_dir = os.path.abspath(args.input_dir)
         print(f"将处理 {input_dir} 下的所有子目录")
         folders_to_process = [os.path.join(input_dir, d) for d in os.listdir(input_dir)
-                             if os.path.isdir(os.path.join(input_dir, d))]
+                              if os.path.isdir(os.path.join(input_dir, d))]
 
     # 过滤掉无效的文件夹
     valid_folders = []
