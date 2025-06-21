@@ -105,13 +105,14 @@ def process_group(group_path, group_dir, output_dir):
                     else:
                         body_exception.append(exception_msg)
                         folder_counts[folder]['body_exception'] = count  # 记录实际异常数量
-                    continue
+                    # continue
 
                 # 检查分辨率
                 small_imgs = []
                 for img_path in image_paths[:]:  # 使用副本进行迭代
                     size = get_image_size(img_path)
                     if size is None:
+                        image_paths.remove(img_path)  # 从原列表中移除无法获取尺寸的图片
                         continue
                     w, h = size
                     if w < 50 or h < 50:
