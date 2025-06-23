@@ -101,8 +101,8 @@ def process_group(group_path, group_dir, output_dir):
     else:
         pass
         # 目录已经存在,直接跳过
-        # print(f"{group_dir} 目录已存在，跳过处理。")
-        # return 1
+        print(f"{group_dir} 目录已存在，跳过处理。")
+        return 1
 
     script_path = os.path.abspath(__file__)
     script_dir = os.path.dirname(script_path)
