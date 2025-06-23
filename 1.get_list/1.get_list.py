@@ -201,7 +201,9 @@ if __name__ == "__main__":
             print(f"错误：找不到 {group_path}")
     else:
         # 处理所有group
-        for group in os.listdir(data_dir):
+        data_dir_list = os.listdir(data_dir)
+        data_dir_list = sorted(data_dir_list)
+        for group in data_dir_list:
             group_path = os.path.join(data_dir, group)
             if os.path.isdir(group_path) and group.startswith('group_'):
                 print(f"处理 {group}...")
