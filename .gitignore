@@ -7,3 +7,4 @@ result_list
 __pycache__/
 *.pyc
 temp_log/
+result*
