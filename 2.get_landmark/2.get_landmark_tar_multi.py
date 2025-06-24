@@ -1,4 +1,4 @@
-print('第一版, 单线程, 单文件, 每100张图片批量提取一次')
+print('第二版, 多进程, 多文件, 每个TAR文件一个进程处理')
 import io
 import os
 from os.path import exists
@@ -17,6 +17,8 @@ from tqdm import tqdm
 import tarfile
 
 import time
+from joblib import Parallel, delayed
+from multiprocessing import Manager
 
 
 def parse_args():
@@ -25,13 +27,13 @@ def parse_args():
     parser.add_argument('--input_dir', default='J:/work/clean/result_0', type=str, help='输入目录,压缩包存储目录')
     parser.add_argument('--output_dir', default='J:/work/clean/result_2', type=str, help='结果目录')
     parser.add_argument('--specific_folder', default='group_0', type=str,
-                        help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')  # ../result/group_0
+                        help='指定处理的文件夹完整路径 (如果设置，将只处理该文件夹)')
     parser.add_argument('--cpu', action="store_true", default=False, help='使用CPU而非GPU')
     parser.add_argument('--model_path', default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                              './weights/retinaface_Resnet50_Final.pth'), type=str,
                         help='模型路径')
-    parser.add_argument('--save_image', default='False', type=str, help='保存图片')
-
+    parser.add_argument('--num_gpus', default=4, type=int, help='要使用的GPU数量 (默认: 4)')
+    parser.add_argument('--n_jobs', default=None, type=int, help='并行任务数 (默认: GPU数量)')
     return parser.parse_args()
 
 
@@ -161,17 +163,157 @@ def detect_face(img_raw, net, device, cfg):
     return best_landms, best_score
 
 
-def detect_images(img_list, detect_file, fail_file, file_name, net, device, cfg):
-    landmark_list, score_list = [], []
+def detect_images(img_list, net, device, cfg):
+    landmark_list, score_list, name_list = [], [], []
     for img_raw, member_name in img_list:
         # 检测人脸
         landmarks, score = detect_face(img_raw, net, device, cfg)
         landmark_list.append(landmarks)
         score_list.append(score)
+        name_list.append(member_name)
+    return landmark_list, score_list, name_list
+
+
+def process_single_tar(file_name, folder_path, gpu_pool, model_path, output_dir, group_dir):
+    """
+    处理单个tar文件的函数，从GPU池中获取可用GPU
+    """
+    # 从GPU池中获取可用GPU ID
+    cuda_id = gpu_pool.get()
+    print(f"在 GPU {cuda_id} 上处理TAR文件: {file_name}")
+
+    try:
+        # 设置参数
+        trained_model = model_path
+        use_cpu = False
+
+        # 设置设备
+        torch.set_grad_enabled(False)
+        if torch.cuda.is_available():
+            torch.cuda.set_device(cuda_id)
+
+        cfg = {
+            'name': 'Resnet50',
+            'min_sizes': [[16, 32], [64, 128], [256, 512]],
+            'steps': [8, 16, 32],
+            'variance': [0.1, 0.2],
+            'clip': False,
+            'loc_weight': 2.0,
+            'gpu_train': True,
+            'batch_size': 24,
+            'ngpu': 4,
+            'epoch': 100,
+            'decay1': 70,
+            'decay2': 90,
+            'image_size': 840,
+            'pretrain': None,
+            'return_layers': {'layer2': 1, 'layer3': 2, 'layer4': 3},
+            'in_channel': 256,
+            'out_channel': 256
+        }
+
+        # 加载网络和模型
+        net = RetinaFace(cfg=cfg, phase='test')
+        net = load_model(net, trained_model, use_cpu)
+        net.eval()
+        print(f'GPU {cuda_id} 完成模型加载！处理文件: {file_name}')
+        # cudnn.benchmark = True
+        device = torch.device(f"cuda:{cuda_id}")
+        net = net.to(device)
+
+        if not file_name.endswith('.tar.gz'):
+            return 0
+
+        tar_path = os.path.join(folder_path, file_name)
+
+        img_list = []
+        with tarfile.open(tar_path, 'r:gz') as tar:
+            member_list = [member for member in tar.getmembers()]
+
+            # member_list = member_list[:10]
+
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            temp_log_dir = os.path.join(script_dir, "temp_log")
+            os.makedirs(temp_log_dir, exist_ok=True)
+
+            landmark_list, score_list, name_list = [], [], []
+
+            with tqdm(member_list, desc=f"{file_name}",
+                      total=len(member_list),
+                      leave=True,
+                      file=open(
+                          os.path.join(temp_log_dir, f"progress_{group_dir}_{file_name}.log"),
+                          'w',
+                          encoding='utf-8')) as pbar2:
+                for member in pbar2:
+                    if not member.isfile():
+                        continue
+                    # 只处理图片文件
+                    if not (member.name.lower().endswith('.jpg') or member.name.lower().endswith('.png')):
+                        continue
+                    # 读取图片为numpy数组
+                    img_file = tar.extractfile(member)
+                    if img_file is None:
+                        continue
+                    img_data = np.frombuffer(img_file.read(), np.uint8)
+                    img_raw = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+                    img_list.append((img_raw, member.name))
+                    if len(img_list) >= 100:
+                        landmark, score, name = detect_images(img_list, net, device, cfg)
+                        landmark_list.extend(landmark)
+                        score_list.extend(score)
+                        name_list.extend(name)
+                        img_list = []
+
+        # 处理剩余的图片
+        if img_list:
+            landmark, score, name = detect_images(img_list, net, device, cfg)
+            landmark_list.extend(landmark)
+            score_list.extend(score)
+            name_list.extend(name)
+            img_list = []
+
+        return landmark_list, score_list, name_list, [file_name] * len(name_list)
+    finally:
+        # 无论处理是否成功，都将GPU ID放回池中
+        gpu_pool.put(cuda_id)
+        print(f"GPU {cuda_id} 已释放回池中，完成文件: {file_name}")
+
+
+def process_tar_images(folder_path, gpu_pool, model_path, output_dir, group_dir, n_jobs):
+    # 遍历文件夹下所有tar.gz文件
+    tar_list = os.listdir(folder_path)
+    tar_list = [f for f in tar_list if f.endswith('.tar.gz')]
+
+    # tar_list = tar_list[:1]
+
+    if not tar_list:
+        print(f"在 {folder_path} 中没有找到 .tar.gz 文件")
+        return
+
+    print(f"发现 {len(tar_list)} 个 TAR 文件，将并行处理")
+
+    # 使用joblib进行并行处理
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(process_single_tar)(file_name, folder_path, gpu_pool, model_path, output_dir, group_dir)
+        for file_name in tar_list
+    )
+
+    landmark_list, score_list, name_list, file_list = [], [], [], []
+    for res in results:
+        landmark_list.extend(res[0])
+        score_list.extend(res[1])
+        name_list.extend(res[2])
+        file_list.extend(res[3])
+
+    # 创建结果文件
+    detect_file = os.path.join(output_dir, group_dir, "face_detect.txt")
+    fail_file = os.path.join(output_dir, group_dir, "face_fail.txt")
+
     detect_res_file = open(detect_file, 'a', encoding='utf-8')
     fail_res_file = open(fail_file, 'a', encoding='utf-8')
 
-    for landmark, score, (_, member_name) in zip(landmark_list, score_list, img_list):
+    for landmark, score, member_name, file_name in zip(landmark_list, score_list, name_list, file_list):
         # 记录结果
         if landmark is None:
             fail_res_file.write(f"{file_name}:{member_name}\n")
@@ -186,102 +328,30 @@ def detect_images(img_list, detect_file, fail_file, file_name, net, device, cfg)
     detect_res_file.close()
     fail_res_file.close()
 
-
-def process_tar_images(folder_path, net, device, cfg, detect_file, fail_file, save_image=False):
-    # 遍历文件夹下所有tar.gz文件
-    tar_list = os.listdir(folder_path)
-
-    # tar_list = tar_list[:2]
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    temp_log_dir = os.path.join(script_dir, "temp_log")
-    os.makedirs(temp_log_dir, exist_ok=True)
-
-    with tqdm(tar_list, desc=f"{os.path.basename(folder_path)}",
-              total=len(tar_list),
-              leave=True,
-              file=open(os.path.join(temp_log_dir, f"progress_{os.path.basename(folder_path)}.log"), 'w',
-                        encoding='utf-8')) as pbar:
-        for file_name in pbar:
-            if not file_name.endswith('.tar.gz'):
-                continue
-            tar_path = os.path.join(folder_path, file_name)
-
-            img_list = []
-            with tarfile.open(tar_path, 'r:gz') as tar:
-                member_list = [member for member in tar.getmembers()]
-
-                with tqdm(member_list, desc=f"{file_name}",
-                          total=len(member_list),
-                          leave=True,
-                          file=open(
-                              os.path.join(temp_log_dir, f"progress_{os.path.basename(folder_path)}_{file_name}.log"),
-                              'w',
-                              encoding='utf-8')) as pbar2:
-                    for member in pbar2:
-                        if not member.isfile():
-                            continue
-                        # 只处理图片文件
-                        if not (member.name.lower().endswith('.jpg') or member.name.lower().endswith('.png')):
-                            continue
-                        # 读取图片为numpy数组
-                        img_file = tar.extractfile(member)
-                        if img_file is None:
-                            continue
-                        img_data = np.frombuffer(img_file.read(), np.uint8)
-                        img_raw = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
-                        img_list.append((img_raw, member.name))
-                        if len(img_list) >= 100:
-                            detect_images(img_list, detect_file, fail_file, file_name, net, device, cfg)
-                            img_list = []
-
-            # 处理剩余的图片
-            if img_list:
-                detect_images(img_list, detect_file, fail_file, file_name, net, device, cfg)
+    return 1
 
 
 def main():
     # 解析命令行参数
     args = parse_args()
 
-    # 设置参数
-    trained_model = args.model_path
-    network = 'resnet50'
-    use_cpu = args.cpu
+    # 确定可用的GPU数量
+    available_gpus = min(args.num_gpus, torch.cuda.device_count()) if torch.cuda.is_available() else 0
 
-    # 设置设备
-    torch.set_grad_enabled(False)
-    if not use_cpu and torch.cuda.is_available():
-        torch.cuda.set_device(args.cuda_id)
+    if available_gpus == 0:
+        print("警告：没有可用的GPU，将使用CPU模式")
+        args.cpu = True
+    else:
+        print(f"检测到 {available_gpus} 个可用GPU")
 
-    cfg = {
-        'name': 'Resnet50',
-        'min_sizes': [[16, 32], [64, 128], [256, 512]],
-        'steps': [8, 16, 32],
-        'variance': [0.1, 0.2],
-        'clip': False,
-        'loc_weight': 2.0,
-        'gpu_train': True,
-        'batch_size': 24,
-        'ngpu': 4,
-        'epoch': 100,
-        'decay1': 70,
-        'decay2': 90,
-        'image_size': 840,
-        'pretrain': None,
-        'return_layers': {'layer2': 1, 'layer3': 2, 'layer4': 3},
-        'in_channel': 256,
-        'out_channel': 256
-    }
+    # 如果使用CPU，不使用多进程
+    if args.cpu:
+        print("使用CPU模式，将不启用多GPU并行处理")
+        # 这里可以添加CPU模式的处理逻辑
+        return
 
-    # 加载网络和模型
-    net = RetinaFace(cfg=cfg, phase='test')
-    net = load_model(net, trained_model, use_cpu)
-    net.eval()
-    print(f'完成模型加载！使用设备: {"CPU" if use_cpu else f"CUDA:{args.cuda_id}"}')
-    cudnn.benchmark = True
-    device = torch.device("cpu" if use_cpu else f"cuda:{args.cuda_id}")
-    net = net.to(device)
+    # 设置并行任务数
+    n_jobs = args.n_jobs if args.n_jobs is not None else available_gpus
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -296,12 +366,21 @@ def main():
         print(f"将处理 {input_dir} 下的所有子目录")
         folders_to_process = [os.path.join(input_dir, d) for d in os.listdir(input_dir)
                               if os.path.isdir(os.path.join(input_dir, d))]
+
     valid_folders = []
     for folder in folders_to_process:
         if os.path.isdir(folder):
             valid_folders.append(folder)
         else:
             print(f"跳过无效文件夹: {folder}")
+
+    # 创建GPU ID池
+    manager = Manager()
+    gpu_pool = manager.Queue()
+
+    # 初始化GPU池，将所有可用的GPU ID放入池中
+    for i in range(available_gpus):
+        gpu_pool.put(i)
 
     for folder_path in valid_folders:
         start_time = time.time()
@@ -312,17 +391,16 @@ def main():
         # 获取文件夹名称作为组名
         group_dir = os.path.basename(folder_path)
         os.makedirs(os.path.join(args.output_dir, group_dir), exist_ok=True)
+
         if os.path.exists(os.path.join(args.output_dir, group_dir, "face_detect.txt")):
             print(f"跳过已处理的文件夹: {group_dir}")
             continue
-        # 创建结果文件
-        detect_file = os.path.join(args.output_dir, group_dir, "face_detect.txt")
-        fail_file = os.path.join(args.output_dir, group_dir, "face_fail.txt")
 
-        process_tar_images(folder_path, net, device, cfg, detect_file, fail_file)
+        # 处理该文件夹下的所有tar文件
+        process_tar_images(folder_path, gpu_pool, args.model_path, args.output_dir, group_dir, n_jobs)
 
         print(
-            f"组 {group_dir} 处理完成, 结果保存在 {detect_file} {fail_file} 中, 耗时 {time.time() - start_time:.2f} 秒")
+            f"组 {group_dir} 处理完成, 结果保存在 {os.path.join(args.output_dir, group_dir)}, 耗时 {time.time() - start_time:.2f} 秒")
 
 
 if __name__ == '__main__':
