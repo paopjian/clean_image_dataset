@@ -1,10 +1,8 @@
 data
-result
-result_list
-.idea
-/3.get_features/pretrained/adaface_ir101_webface12m.ckpt
-/2.get_landmark/weights/retinaface_Resnet50_Final.pth
-__pycache__/
-*.pyc
-temp_log/
 result*
+.idea
+adaface_ir101_webface12m.ckpt
+retinaface_Resnet50_Final.pth
+__pycache__
+*.pyc
+temp_log

@@ -187,7 +187,7 @@ def detect_images(img_list, detect_file, fail_file, file_name, net, device, cfg)
     fail_res_file.close()
 
 
-def process_tar_images(folder_path, net, device, cfg, detect_file, fail_file, save_image=False):
+def process_tar_images(folder_path, net, device, cfg, detect_file, fail_file):
     # 遍历文件夹下所有tar.gz文件
     tar_list = os.listdir(folder_path)
 
@@ -196,6 +196,8 @@ def process_tar_images(folder_path, net, device, cfg, detect_file, fail_file, sa
     script_dir = os.path.dirname(os.path.abspath(__file__))
     temp_log_dir = os.path.join(script_dir, "temp_log")
     os.makedirs(temp_log_dir, exist_ok=True)
+    group_dir = os.path.basename(folder_path)
+    os.makedirs(os.path.join(temp_log_dir, group_dir), exist_ok=True)
 
     with tqdm(tar_list, desc=f"{os.path.basename(folder_path)}",
               total=len(tar_list),
@@ -215,7 +217,8 @@ def process_tar_images(folder_path, net, device, cfg, detect_file, fail_file, sa
                           total=len(member_list),
                           leave=True,
                           file=open(
-                              os.path.join(temp_log_dir, f"progress_{os.path.basename(folder_path)}_{file_name}.log"),
+                              os.path.join(temp_log_dir, group_dir,
+                                           f"progress_{os.path.basename(folder_path)}_{file_name}.log"),
                               'w',
                               encoding='utf-8')) as pbar2:
                     for member in pbar2:

@@ -235,6 +235,7 @@ def process_single_tar(file_name, folder_path, gpu_pool, model_path, output_dir,
             script_dir = os.path.dirname(os.path.abspath(__file__))
             temp_log_dir = os.path.join(script_dir, "temp_log")
             os.makedirs(temp_log_dir, exist_ok=True)
+            os.makedirs(os.path.join(temp_log_dir, group_dir), exist_ok=True)
 
             landmark_list, score_list, name_list = [], [], []
 
@@ -242,7 +243,7 @@ def process_single_tar(file_name, folder_path, gpu_pool, model_path, output_dir,
                       total=len(member_list),
                       leave=True,
                       file=open(
-                          os.path.join(temp_log_dir, f"progress_{group_dir}_{file_name}.log"),
+                          os.path.join(temp_log_dir, group_dir, f"progress_{group_dir}_{file_name}.log"),
                           'w',
                           encoding='utf-8')) as pbar2:
                 for member in pbar2:
